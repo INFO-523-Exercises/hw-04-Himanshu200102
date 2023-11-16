@@ -1,0 +1,571 @@
+---
+title: "Hw-04"
+format: html
+editor: visual
+author: "Himanshu Nimbarte"
+---
+
+## First we will install all the required packages
+
+```{r}
+# Required packages
+if (!require(pacman))
+  install.packages("pacman")
+if(!require(DMwR2))
+  install.packages("DMwR2")
+library(DMwR2)
+
+pacman::p_load(tidymodels,
+               tidyverse,
+               ranger,
+               randomForest,
+               glmnet,
+               gridExtra,
+               qqplotr)
+
+# Global ggplot theme
+theme_set(theme_bw() + theme(legend.position = "top"))
+```
+
+Here we ware going to go through various regression modeling technique for our dataset big_tech_stock_price.csv to answer the following question.
+
+How do daily opening prices, trading volumes, and historical trends influence the adjusted closing prices of stocks?
+
+```{r}
+# Reading the dataset
+stock_prices <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2023/2023-02-07/big_tech_stock_prices.csv')
+head(stock_prices)
+```
+
+To find the appropriate features that will be needed for our training and testing set we will find a co-vairiance matrix for the same.
+
+```{r}
+# First we will select the columns that are useful for answering the question
+stock_prices_col <- stock_prices[, 3:7] %>%
+  drop_na()
+head(stock_prices_col)
+```
+
+```{r}
+# Correlation Matrix
+round(cor(stock_prices_col),
+  digits = 3 # rounded to 2 decimals
+)
+```
+
+Now as we want our target variable to be adjusted close price (adj_close), so we will look for co relation between that variable and other features.
+
+Looking into the correlation matrix we can find high and close have highest value of co relation, and according to the question asked for the dataset we will use highest price of the day as our X and use adj_close as our Y i.e. our target variable.
+
+## Multiple Linear Regression
+
+### Starting with modeling
+
+### Step 1:  Split Input Data into Training and Test Sets
+
+```{r}
+# Train/test split, As we need to split data 
+instances <- nrow(stock_prices_col)
+numTrain <- 20   # number of training instances
+numTest <- instances - numTrain
+set.seed(123) # For reproducibility
+
+X <- stock_prices_col$high
+y <- stock_prices_col$adj_close
+
+data <- tibble(X = X, y = y)
+
+split_obj <- initial_split(data, prop = numTrain/instances)
+
+# Extract train and test data
+train_data <- training(split_obj)
+test_data <- testing(split_obj)
+
+# Extract X_train, X_test, y_train, y_test
+X_train <- train_data$X
+y_train <- train_data$y
+
+X_test <- test_data$X
+y_test <- test_data$y
+```
+
+This will give us Training and Testing set for both X and y attributes of our dataset.
+
+### Step 2: Fit Regression Model to Training Set
+
+```{r}
+# Create a linear regression model specification
+lin_reg_spec <- linear_reg() |> 
+  set_engine("lm")
+
+# Fit the model to the training data
+lin_reg_fit <- lin_reg_spec |> 
+  fit(y ~ X, data = train_data)
+```
+
+### Step 3: Apply Model to the testing set
+
+```{r}
+# Apply model to the test set
+y_pred_test <- predict(lin_reg_fit, new_data = test_data) |>
+  pull(.pred)
+```
+
+### Step 4: Evaluate Model Performance on Test Set
+
+```{r}
+# Plotting true vs predicted values
+ggplot() + 
+  geom_point(aes(x = as.vector(y_test), y = y_pred_test), color = 'black') +
+  ggtitle('Comparing true and predicted values for test set') +
+  xlab('True values for y') +
+  ylab('Predicted values for y')
+```
+
+Above is the plot for comparing true values and the predicted values.
+
+```{r}
+# Prepare data for yardstick evaluation
+eval_data <- tibble(
+  truth = as.vector(y_test),
+  estimate = y_pred_test
+)
+
+# Model evaluation
+rmse_value <- rmse(data = eval_data, truth = truth, estimate = estimate)
+cat("Root mean squared error =", sprintf("%.4f", rmse_value$.estimate), "\n")
+```
+
+```{r}
+r2_value <- rsq(eval_data, truth = truth, estimate = estimate)
+cat('R-squared =', sprintf("%.4f", r2_value$.estimate), "\n")
+```
+
+Above using tibble() we will create data frame containing y testing and y predicted values naming them truth and estimate. After that calculated Root mean square error value and R-squared value. As we can see higher R-squared values, this indicates model fitting is good.
+
+### Step-5 Postprocessing
+
+```{r}
+# Display model parameters
+coef_values <- coef(lin_reg_fit$fit)  # Extract coefficients
+slope <- coef_values["X"]
+intercept <- coef_values["(Intercept)"]
+
+cat("Slope =", slope, "\n")
+```
+
+```{r}
+cat("Intercept =", intercept, "\n")
+```
+
+```{r}
+### Step 4: Postprocessing
+
+# Plot outputs
+ggplot() +
+  geom_point(aes(x = as.vector(X_test), y = as.vector(y_test)), color = 'black') +
+  geom_line(aes(x = as.vector(X_test), y = y_pred_test), color = 'blue', linewidth = 1) +
+  ggtitle(sprintf('Predicted Function: y = %.2fX + %.2f', slope, intercept)) +
+  xlab('X') +
+  ylab('y')
+```
+
+### Effect of correlated attributes
+
+here, we will try find how regression model is affected due to correlation , here we will create additional variables and assign them different columns.
+
+```{r}
+X2 <- stock_prices_col$open
+X3 <- stock_prices_col$low
+X4 <- stock_prices_col$close
+```
+
+```{r}
+# Create plots
+plot1 <- ggplot() +
+  geom_point(aes(X, X2), color='black') +
+  xlab('X') + ylab('X2') +
+  ggtitle(sprintf("Correlation between X and X2 = %.4f", cor(X[-c((instances-numTest+1):instances)], X2[-c((instances-numTest+1):instances)])))
+
+plot2 <- ggplot() +
+  geom_point(aes(X2, X3), color='black') +
+  xlab('X2') + ylab('X3') +
+  ggtitle(sprintf("Correlation between X2 and X3 = %.4f", cor(X2[-c((instances-numTest+1):instances)], X3[-c((instances-numTest+1):instances)])))
+
+plot3 <- ggplot() +
+  geom_point(aes(X3, X4), color='black') +
+  xlab('X3') + ylab('X4') +
+  ggtitle(sprintf("Correlation between X3 and X4 = %.4f", cor(X3[-c((instances-numTest+1):instances)], X4[-c((instances-numTest+1):instances)])))
+# Combine plots into a 2x2 grid
+grid.arrange(plot1, plot2, plot3, ncol=2)
+```
+
+Plots above show the correlations of different features that can be used for modeling.
+
+Now we will create 3 additional version of training and test set
+
+1st set will contain X and X2 variables.
+
+2nd set will contain X, X2 and X3 variables.
+
+3rd set will contain X, X2, X3 and X4 variables.
+
+```{r}
+# Split data into training and testing sets
+train_indices <- 1:(instances - numTest)
+test_indices <- (instances - numTest + 1):instances
+
+# Create combined training and testing sets
+X_train2 <- cbind(X[train_indices], X2[train_indices])
+X_test2 <- cbind(X[test_indices], X2[test_indices])
+
+X_train3 <- cbind(X[train_indices], X2[train_indices], X3[train_indices])
+X_test3 <- cbind(X[test_indices], X2[test_indices], X3[test_indices])
+
+X_train4 <- cbind(X[train_indices], X2[train_indices], X3[train_indices], X4[train_indices])
+X_test4 <- cbind(X[test_indices], X2[test_indices], X3[test_indices], X4[test_indices])
+```
+
+Now we will train our regression model with new 4 version of training and testing data, here we will get 4 models for every version of data split
+
+```{r}
+# Convert matrices to tibbles for training
+train_data2 <- tibble(X1 = X_train2[,1], X2 = X_train2[,2], y = y_train)
+train_data3 <- tibble(X1 = X_train3[,1], X2 = X_train3[,2], X3 = X_train3[,3], y = y_train)
+train_data4 <- tibble(X1 = X_train4[,1], X2 = X_train4[,2], X3 = X_train4[,3], X4 = X_train4[,4], y = y_train)
+
+# Train models
+regr2_spec <- linear_reg() %>% set_engine("lm")
+regr2_fit <- regr2_spec %>% fit(y ~ X1 + X2, data = train_data2)
+
+regr3_spec <- linear_reg() %>% set_engine("lm")
+regr3_fit <- regr3_spec %>% fit(y ~ X1 + X2 + X3, data = train_data3)
+
+regr4_spec <- linear_reg() %>% set_engine("lm")
+regr4_fit <- regr4_spec %>% fit(y ~ X1 + X2 + X3 + X4, data = train_data4)
+```
+
+Now we will apply the models to the sets
+
+```{r}
+# Convert matrices to data.frames for predictions
+new_train_data2 <- setNames(as.data.frame(X_train2), c("X1", "X2"))
+new_test_data2 <- setNames(as.data.frame(X_test2), c("X1", "X2"))
+
+new_train_data3 <- setNames(as.data.frame(X_train3), c("X1", "X2", "X3"))
+new_test_data3 <- setNames(as.data.frame(X_test3), c("X1", "X2", "X3"))
+
+new_train_data4 <- setNames(as.data.frame(X_train4), c("X1", "X2", "X3", "X4"))
+new_test_data4 <- setNames(as.data.frame(X_test4), c("X1", "X2", "X3", "X4"))
+
+# Predictions
+y_pred_train2 <- predict(regr2_fit, new_data = new_train_data2)
+y_pred_test2 <- predict(regr2_fit, new_data = new_test_data2)
+
+y_pred_train3 <- predict(regr3_fit, new_data = new_train_data3)
+y_pred_test3 <- predict(regr3_fit, new_data = new_test_data3)
+
+y_pred_train4 <- predict(regr4_fit, new_data = new_train_data4)
+y_pred_test4 <- predict(regr4_fit, new_data = new_test_data4)
+```
+
+Now we will compute both training and test errors of the model, we will show the resulting model and sum of absolute weights of regression coefficients.
+
+```{r}
+# Extract coefficients and intercepts
+get_coef <- function(model) {
+  coef <- coefficients(model$fit)
+  coef
+}
+
+# Calculate RMSE
+calculate_rmse <- function(actual, predicted) {
+  rmse <- sqrt(mean((actual - predicted)^2))
+  rmse
+}
+
+results <- tibble(
+  Model = c(sprintf("%.2f X + %.2f", get_coef(regr2_fit)['X1'], get_coef(regr2_fit)['(Intercept)']),
+            sprintf("%.2f X + %.2f X2 + %.2f", get_coef(regr3_fit)['X1'], get_coef(regr3_fit)['X2'], get_coef(regr3_fit)['(Intercept)']),
+            sprintf("%.2f X + %.2f X2 + %.2f X3 + %.2f", get_coef(regr4_fit)['X1'], get_coef(regr4_fit)['X2'], get_coef(regr4_fit)['X3'], get_coef(regr4_fit)['(Intercept)'])),
+  
+  Train_error = c(calculate_rmse(y_train, y_pred_train2$.pred),
+                  calculate_rmse(y_train, y_pred_train3$.pred),
+                  calculate_rmse(y_train, y_pred_train4$.pred)),
+  
+  Test_error = c(calculate_rmse(y_test, y_pred_test2$.pred),
+                 calculate_rmse(y_test, y_pred_test3$.pred),
+                 calculate_rmse(y_test, y_pred_test4$.pred)),
+  
+  Sum_of_Absolute_Weights = c(sum(abs(get_coef(regr2_fit))),
+                              sum(abs(get_coef(regr3_fit))),
+                              sum(abs(get_coef(regr4_fit))))
+)
+
+# Plotting
+ggplot(results, aes(x = Sum_of_Absolute_Weights)) +
+  geom_line(aes(y = Train_error, color = "Train error"), linetype = "solid") +
+  geom_line(aes(y = Test_error, color = "Test error"), linetype = "dashed") +
+  labs(x = "Sum of Absolute Weights", y = "Error rate") +
+  theme_minimal()
+
+
+```
+
+```{r}
+results
+```
+
+As we can see in the graph after a point of time there is minor changes in test error and also the training error, but in short as we increasing the complexity both the errors are decreasing for our condition, this is a good sign more the data i.e. the complexity we are increasing more accurate predictions we can get.
+
+## Ridge Regression
+
+We can use ridge regression which is a type of multiple linear regression which can be used to fit linear model to data by regularized loss function
+
+We will use previously created training set with correlated attributes
+
+```{r}
+# Convert to data frame
+train_data <- tibble(y = y_train, X_train4)
+test_data <- tibble(y = y_test, X_test4)
+
+# Set up a Ridge regression model specification
+ridge_spec <- linear_reg(penalty = 0.4, mixture = 1) %>% 
+  set_engine("glmnet")
+
+# Fit the model
+ridge_fit <- ridge_spec %>% 
+  fit(y ~ ., data = train_data)
+
+
+# Make predictions
+y_pred_train_ridge <- predict(ridge_fit, new_data = train_data)$.pred
+y_pred_test_ridge <- predict(ridge_fit, new_data = train_data)$.pred
+
+# Calculate RMSE
+calculate_rmse <- function(actual, predicted) {
+  rmse <- sqrt(mean((actual - predicted)^2))
+  rmse
+}
+
+# Extract coefficients
+ridge_coef <- coefficients(ridge_fit$fit)
+
+model5 <- sprintf("%.2f X + %.2f X2 + %.2f X3 + %.2f X4 + %.2f", 
+                 ridge_coef[2], ridge_coef[3], ridge_coef[4], 
+                 ridge_coef[5], ridge_coef[1])
+
+values5 <- tibble(
+  Model = model5,
+  Train_error = calculate_rmse(y_train, y_pred_train_ridge),
+  Test_error = calculate_rmse(y_test, y_pred_test_ridge),
+  Sum_of_Absolute_Weights = sum(abs(ridge_coef))
+)
+
+# Combining the results
+final_results <- bind_rows(results, values5)
+
+final_results
+```
+
+Here, we can set appropriate hyper parameters, this will help in controlling the sum of absolute weights.
+
+## Lasso Regression
+
+If there is model over fitting in any case we can use Lasso Regression , this can help in doing this in better way as compared to Ridge Regression.
+
+```{r}
+# Define the lasso specification
+lasso_spec <- linear_reg(penalty = 0.02, mixture = 1) %>% 
+  set_engine("glmnet")
+
+# Ensure the data is combined correctly
+train_data <- tibble(y = y_train, X1 = X_train4[,1], X2 = X_train4[,2], 
+                     X3 = X_train4[,3])
+
+# Fit the model
+lasso_fit <- lasso_spec %>%
+  fit(y ~ ., data = train_data)
+
+# Extract coefficients
+lasso_coefs <- lasso_fit$fit$beta[,1]
+
+# Predictions
+y_pred_train_lasso <- predict(lasso_fit, new_data = train_data)$.pred
+y_pred_test_lasso <- predict(lasso_fit, new_data = tibble(X1 = X_test4[,1], X2 = X_test4[,2], 
+                                                          X3 = X_test4[,3], X4 = X_test4[,4]))$.pred
+
+# Create the model string
+model6 <- sprintf("%.2f X + %.2f X2 + %.2f X3 + %.2f X4 + %.2f", 
+                  lasso_coefs[2], lasso_coefs[3], lasso_coefs[4], 
+                  lasso_coefs[5], lasso_fit$fit$a0[1])
+
+values6 <- c(model6, 
+             sqrt(mean((y_train - y_pred_train_lasso)^2)),
+             sqrt(mean((y_test - y_pred_test_lasso)^2)),
+             sum(abs(lasso_coefs[-1])) + abs(lasso_fit$fit$a0[1]))
+
+# Make the results tibble
+lasso_results <- tibble(Model = "Lasso",
+                        `Train error` = values6[2], 
+                        `Test error` = values6[3], 
+                        `Sum of Absolute Weights` = values6[4])
+
+lasso_results
+```
+
+As we can compare it to the Ridge Regression we can see test error is better as compared to ridge regression.
+
+## **Hyperparameter Selection via Cross-Validation**
+
+Now to pick up the appropriate hyper parameter value alpha, we will use 5-fold cross validation, where the data set is divided in 5 set where each set is used as validation set and others as training sets.
+
+```{r}
+# Combine training data
+y_train <- as.vector(y_train)
+
+train_data <- tibble(y = y_train, X1 = X_train4[,1], X2 = X_train4[,2], 
+                     X3 = X_train4[,3], X4 = X_train4[,4])
+
+# Define recipe
+recipe_obj <- recipe(y ~ ., data = train_data) %>%
+  step_normalize(all_predictors()) |>
+  prep()
+
+# Define the ridge specification
+ridge_spec <- linear_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet")
+
+# Ridge workflow
+ridge_wf <- workflow() |>
+  add_model(ridge_spec) |>
+  add_recipe(recipe_obj)
+
+# Grid of alphas
+alphas <- tibble(penalty = c(0.2, 0.4, 0.6, 0.8, 1.0))
+
+# Tune
+tune_results <- 
+  ridge_wf |>
+  tune_grid(
+  resamples = bootstraps(train_data, times = 5),
+  grid = alphas
+)
+
+
+# Extract best parameters
+best_params <- tune_results %>% select_best("rmse")
+
+# Refit the model
+ridge_fit <- ridge_spec %>%
+  finalize_model(best_params) %>%
+  fit(y ~ ., data = train_data)
+
+# Extract coefficients
+ridge_coefs <- ridge_fit$fit$beta[,1]
+
+# Predictions
+y_pred_train_ridge <- predict(ridge_fit, new_data = train_data)$.pred
+y_pred_test_ridge <- predict(ridge_fit, new_data = tibble(X1 = X_test4[,1], X2 = X_test4[,2], 
+                                                          X3 = X_test4[,3], X4 = X_test4[,4]))$.pred
+
+# Create the model string
+model5 <- sprintf("%.2f X + %.2f X2 + %.2f X3 + %.2f X4 + %.2f", 
+                  ridge_coefs[2], ridge_coefs[3], ridge_coefs[4], 
+                  ridge_coefs[5], ridge_fit$fit$a0[1])
+
+values5 <- c(model5, 
+             sqrt(mean((y_train - y_pred_train_ridge)^2)),
+             sqrt(mean((y_test - y_pred_test_ridge)^2)),
+             sum(abs(ridge_coefs[-1])) + abs(ridge_fit$fit$a0[1]))
+
+# Make the results tibble
+ridge_results <- tibble(Model = "RidgeCV",
+                        `Train error` = values5[2], 
+                        `Test error` = values5[3], 
+                        `Sum of Absolute Weights` = values5[4])
+
+cat("Selected alpha =", best_params$penalty, "\n")
+```
+
+```{r}
+all_results <- bind_rows(results, ridge_results)
+all_results
+```
+
+Now we will perform same cross validation for lasso regression model.
+
+```{r}
+set.seed(1234)
+
+# Ensure y_train is a vector
+y_train <- as.vector(y_train)
+
+# Combine training data
+train_data <- tibble(y = y_train, X1 = X_train4[,1], X2 = X_train4[,2], 
+                     X3 = X_train4[,3], X4 = X_train4[,4])
+
+# Define recipe
+recipe_obj_lasso <- recipe(y ~ ., data = train_data) %>%
+  step_normalize(all_predictors()) |>
+  prep()
+
+# Define the lasso specification
+lasso_spec <- linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+
+# Lasso workflow
+lasso_wf <- workflow() |>
+  add_recipe(recipe_obj_lasso)
+
+# Lasso fit
+lasso_fit <- lasso_wf |>
+  add_model(lasso_spec) |>
+  fit(data = train_data)
+
+# Grid of alphas for Lasso
+lambda_grid <- grid_regular(penalty(), levels = 50)
+
+# Tune
+tune_results_lasso <- 
+  tune_grid(lasso_wf |> add_model(lasso_spec),
+  resamples = bootstraps(train_data, times = 5),
+  grid = lambda_grid
+)
+
+# Extract best parameters for Lasso
+best_params_lasso <- tune_results_lasso %>% select_best("rmse")
+
+# Refit the model using Lasso
+lasso_fit <- lasso_spec %>%
+  finalize_model(best_params_lasso) %>%
+  fit(y ~ ., data = train_data)
+
+# Extract coefficients
+lasso_coefs <- lasso_fit$fit$beta[,1]
+
+# Predictions using Lasso
+y_pred_train_lasso <- predict(lasso_fit, new_data = train_data)$.pred
+y_pred_test_lasso <- predict(lasso_fit, new_data = tibble(X1 = X_test4[,1], X2 = X_test4[,2], 
+                                                          X3 = X_test4[,3], X4 = X_test4[,4]))$.pred
+
+# Create the model string for Lasso
+model6 <- sprintf("%.2f X + %.2f X2 + %.2f X3 + %.2f X4 + %.2f", 
+                  lasso_coefs[2], lasso_coefs[3], lasso_coefs[4], 
+                  lasso_coefs[5], lasso_fit$fit$a0[1])
+
+values6 <- c(model6, 
+             sqrt(mean((y_train - y_pred_train_lasso)^2)),
+             sqrt(mean((y_test - y_pred_test_lasso)^2)),
+             sum(abs(lasso_coefs[-1])) + abs(lasso_fit$fit$a0[1]))
+
+# Make the results tibble for Lasso
+lasso_results <- tibble(Model = "LassoCV",
+                        `Train error` = values6[2], 
+                        `Test error` = values6[3], 
+                        `Sum of Absolute Weights` = values6[4])
+
+cat("Selected alpha for Lasso =", best_params_lasso$penalty, "\n")
+```
+
+This way we can find hyper parameter alpha for Ridge and Lasso regression using cross validation.
